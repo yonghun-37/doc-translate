@@ -1,0 +1,21 @@
+# 운영: 사내 LLM 주소와 모델명을 입력한 뒤 config.toml로 복사합니다.
+# 이미 사용하는 config.toml을 덮어쓰지 마세요.
+[translator]
+engine = "openai_compatible"
+
+[translator.openai_compatible]
+base_url = "https://llm.example.internal/v1"
+model = "TODO-model-name"
+api_key_env = "DOC_TRANSLATE_API_KEY"
+api_key_file = ""
+allowed_hosts = ["llm.example.internal"]
+ca_bundle = ""
+trust_env_proxy = false
+temperature = 0
+# JSON 배열 출력과 json_object 강제가 충돌할 수 있으므로 기본 비활성입니다.
+json_mode = false
+max_tokens = 4096
+timeout_sec = 180
+retry = 3
+concurrent = 4
+extra_body = {}

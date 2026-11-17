@@ -1,0 +1,20 @@
+# 개발 PC 전용. --config config.hiveai.toml로 명시적으로 선택합니다.
+[translator]
+engine = "openai_compatible"
+
+[translator.openai_compatible]
+base_url = "https://api-sf1-cdn.deploy.com/api/v1"
+model = "deepseek-ai/deepseek-v4.1-flash-1017"
+api_key_env = "DEPLOY_API_KEY"
+api_key_file = "~/.env"
+allowed_hosts = ["api-sf1-cdn.deploy.com"]
+ca_bundle = ""
+trust_env_proxy = false
+temperature = 0
+# 2026-11-17 사용자 실측: json_object 해제 후 12/12 성공.
+json_mode = false
+max_tokens = 16384
+timeout_sec = 180
+retry = 3
+concurrent = 4
+extra_body = {}

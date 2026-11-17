@@ -1,0 +1,22 @@
+[Unit]
+Description=doc-translate 작업 업로드·검토·번역 웹
+After=network.target
+
+[Service]
+Type=simple
+User=doc-translate
+Group=doc-translate
+WorkingDirectory=/opt/doc-translate
+EnvironmentFile=/etc/doc-translate.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/doc-translate/.venv/bin/doc-translate serve --root /opt/doc-translate --config /opt/doc-translate/config.toml --host 127.0.0.1 --port 8000 --max-upload-mb 50
+Restart=on-failure
+RestartSec=5
+# jobs/<job_id>/inputs, review, output and logs must be writable by this account.
+# Configure --allowed-host for the authenticated proxy when needed.
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
