@@ -1,5 +1,6 @@
 """Exact-text translation memory at docutranslate's agent boundary."""
 import re
+import time
 
 
 class TranslationError(RuntimeError):
@@ -36,7 +37,12 @@ class FakeAgent:
 
 
 class ReuseAgent:
-    def __init__(self, memory: dict[str, str], inner, recorder: list | None = None):
+    def __init__(self, memory: dict[str, str], inner, recorder: list | None = None,
+                 *, progress_batch: int = 40, callback=None):
+        if type(progress_batch) is not int or progress_batch < 1:
+            raise ValueError('progress_batch는 양의 정수여야 합니다.')
+        self.progress_batch = progress_batch
+        self.callback = callback
         self._cache = dict(memory)
         self._reusable = frozenset(memory)
         self.memory: dict[str, str] = {}  # Only this job's strings.
@@ -48,19 +54,31 @@ class ReuseAgent:
         missing = list(dict.fromkeys(s for s in segments if s not in self._cache and needs_translation(s)))
         self.stats['segments'] += len(segments)
         self.stats['reused'] += sum(s in self._reusable and needs_translation(s) for s in segments)
-        if missing:
+        if self.callback:
+            self.callback('reuse', dict(self.stats))
+        batches = (len(missing) + self.progress_batch - 1) // self.progress_batch
+        for index, start in enumerate(range(0, len(missing), self.progress_batch), 1):
+            batch = missing[start:start + self.progress_batch]
             if self.recorder is not None:
-                self.recorder.extend(missing)
-            result = self.inner.send_segments(missing, chunk_size)
-            if (not isinstance(result, list) or len(result) != len(missing)
+                self.recorder.extend(batch)
+            if self.callback:
+                self.callback('llm', dict(self.stats))
+            started = time.monotonic()
+            result = self.inner.send_segments(batch, chunk_size)
+            if (not isinstance(result, list) or len(result) != len(batch)
                     or any(not isinstance(s, str) or not s.strip() for s in result)):
                 raise TranslationError('번역 결과의 개수 또는 내용이 올바르지 않습니다.')
             if hasattr(self.inner, 'get_full_stats') and self.inner.get_full_stats().get('unresolved_errors', 0):
                 raise TranslationError('번역 엔진에서 일부 세그먼트 처리에 실패했습니다.') from getattr(self.inner, 'last_request_error', None)
-            self._cache.update(zip(missing, result))
-            self.stats['translated'] += len(missing)
+            self._cache.update(zip(batch, result))
+            self.stats['translated'] += len(batch)
+            if self.callback:
+                self.callback('batch', {**self.stats, 'count': len(batch), 'batch': index,
+                                       'batches': batches, 'elapsed': time.monotonic() - started})
         result = [self._cache[s] if s in self._cache else s for s in segments]
         self.memory.update(zip(segments, result))
+        if self.callback:
+            self.callback('write', dict(self.stats))
         return result
 
     def update_glossary_dict(self, d):

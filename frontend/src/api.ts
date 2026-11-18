@@ -23,6 +23,11 @@ export interface Change {
   where: string;
   old: string | null;
   new: string | null;
+  page?: number;
+  slide?: number;
+  sheet?: string;
+  cell?: string;
+  source?: 'original' | 'revised';
 }
 export interface JobDetail extends JobSummary {
   files: { revised: string; original?: string; 'base_zh-CN'?: string; 'base_zh-TW'?: string };
@@ -36,7 +41,29 @@ export interface JobDetail extends JobSummary {
   artifacts: { redline?: string };
   outputs: { lang: Language; url: string }[];
   stats: Partial<Record<Language, Stats>>;
+  preview?: Preview;
+  progress?: Progress;
 }
+export interface PreviewPage { page: number; name: string; width: number; height: number; side: string }
+export interface Preview { status: 'pending' | 'ready' | 'unavailable' | 'failed'; message: string; pages: PreviewPage[] }
+export type Phase = 'extract' | 'reuse' | 'llm' | 'write' | 'done';
+export interface Progress {
+  phase: Phase;
+  langs: Record<Language, { phase: Phase; total: number; reused: number; translated: number; done: number }>;
+  started_at: string; updated_at: string; eta_sec: number | null;
+  log: { at: string; message: string }[];
+}
+export interface GridCell { addr: string; value: string; bold?: boolean; italic?: boolean; fill?: string; color?: string; align?: 'left' | 'center' | 'right'; span?: { rows: number; cols: number }; change_addrs?: string[] }
+export interface GridSheet {
+  name: string; status: SheetDiff['status']; message: string;
+  cols: { letter: string; width: number }[];
+  rows: { index: number; height: number; cells: GridCell[]; added?: boolean }[];
+  merges: string[];
+  changes: Record<string, Pick<Change, 'op' | 'old' | 'new'>>;
+  removed_rows: { index: number; after: number; cells: GridCell[] }[];
+}
+export interface Overlay { slide: number; shape: string; side: 'original' | 'revised'; op: Change['op']; x: number; y: number; width: number; height: number }
+export const previewUrl = (id: string, name: string) => `${jobUrl(id)}/files/preview/${encodeURIComponent(name)}`;
 export interface SheetDiff {
   sheet: string;
   status: 'added' | 'removed' | 'changed' | 'same';
@@ -72,6 +99,17 @@ export const api = {
   job: (id: string) => request<JobDetail>(jobUrl(id)),
   sheets: (id: string) => request<SheetDiff[]>(`${jobUrl(id)}/sheets`),
   slides: (id: string) => request<SlideDiff[]>(`${jobUrl(id)}/slides`),
+  grid: (id: string, target?: Change) => {
+    const params = new URLSearchParams();
+    if (target?.sheet) params.set('sheet', target.sheet);
+    const match = target?.cell?.match(/^([A-Z]+)(\d+)$/);
+    if (match) {
+      params.set('row', match[2]);
+      params.set('col', String([...match[1]].reduce((sum, c) => sum * 26 + c.charCodeAt(0) - 64, 0)));
+    }
+    return request<GridSheet[]>(`${jobUrl(id)}/grid?${params}`);
+  },
+  overlays: (id: string) => request<Overlay[]>(previewUrl(id, 'overlays.json')),
   delete: (id: string) => request<void>(jobUrl(id), { method: 'DELETE' }),
   decide: (id: string, action: 'translate' | 'reject' | 'retry', body?: { by?: string; reason?: string }) =>
     request<JobDetail>(`${jobUrl(id)}/${action}`, {

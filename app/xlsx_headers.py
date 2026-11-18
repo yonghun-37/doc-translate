@@ -55,6 +55,32 @@ def extract(path: Path) -> dict[tuple[str, str], list[str]]:
                 for name, _, fields in parts for node, _, replacements in fields}
 
 
+def located(path: Path):
+    """Keep the shared header tokenizer while distinguishing left/center/right."""
+    with ZipFile(path) as src:
+        rels = {rel.get('Id'): posixpath.normpath('xl/' + rel.get('Target')).lstrip('/')
+                if not rel.get('Target').startswith('/') else rel.get('Target').lstrip('/')
+                for rel in _xml(src.read('xl/_rels/workbook.xml.rels')) if rel.get('TargetMode') != 'External'}
+        sheets = {rels[s.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id')]: s.get('name')
+                  for s in _xml(src.read('xl/workbook.xml')).findall(f'{{{_NS}}}sheets/*')}
+        parts, _ = _parts(src)
+        result = {}
+        for name, _, fields in parts:
+            for node, tokens, _ in fields:
+                field = etree.QName(node).localname
+                kind = '머리글' if field.endswith('Header') else '바닥글'
+                variant = '짝수 ' if field.startswith('even') else '첫 페이지 ' if field.startswith('first') else ''
+                side, chunks = '가운데', {}
+                for i, token in enumerate(tokens):
+                    if i % 2:
+                        side = {'&L': '왼쪽', '&C': '가운데', '&R': '오른쪽'}.get(token, side)
+                    elif token.strip():
+                        chunks.setdefault(side, []).append(token.strip())
+                for side, texts in chunks.items():
+                    result[(sheets[name], f'{variant}{kind}({side})')] = ' '.join(texts)
+        return result
+
+
 def transform(content: bytes, agent, chunk_size: int = 3000) -> bytes:
     with ZipFile(BytesIO(content)) as src:
         parts, segments = _parts(src)

@@ -2,6 +2,8 @@ import json
 import os
 import re
 import tempfile
+import fcntl
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -68,8 +70,30 @@ class Storage:
         return sorted(states, key=lambda s: (s['created_at'], s['id']), reverse=True)
 
     def save_status(self, state):
-        write_json(self.job_dir(state['id']) / 'status.json', state)
+        with self.status_locked():
+            path = self.job_dir(state['id']) / 'status.json'
+            current = read_json(path) if path.exists() else {}
+            # Rendering owns preview independently of long-running translation.
+            if 'preview' in current:
+                state['preview'] = current['preview']
+            write_json(self.job_dir(state['id']) / 'status.json', state)
         self.event('state', id=state['id'], status=state['status'])
+
+    @contextmanager
+    def status_locked(self):
+        with self.path('logs', '.status.lock').open('a') as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+
+    def update_status(self, job_id, **fields):
+        with self.status_locked():
+            state = self.read_status(job_id)  # Never recreate deleted jobs.
+            state.update(fields)
+            write_json(self.job_dir(job_id) / 'status.json', state)
+            return state
 
     def event(self, event, **fields):
         # Call sites pass metadata only, only sanitized diagnostic summaries, never text segments.

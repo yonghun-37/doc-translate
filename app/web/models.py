@@ -33,6 +33,11 @@ class Change(BaseModel):
     where: str
     old: str | None
     new: str | None
+    page: int | None = None
+    slide: int | None = None
+    sheet: str | None = None
+    cell: str | None = None
+    source: Literal['original', 'revised'] | None = None
 
 
 class Artifacts(BaseModel):
@@ -72,6 +77,8 @@ class JobDetail(JobSummary):
     artifacts: Artifacts
     outputs: list[OutputFile]
     stats: dict[Literal['zh-CN', 'zh-TW'], Stats]
+    preview: dict | None = None
+    progress: dict | None = None
 
 
 class SheetRow(BaseModel):

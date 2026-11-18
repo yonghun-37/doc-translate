@@ -3,7 +3,7 @@ import type { Change } from '../api';
 import InlineDiff from './InlineDiff';
 
 export const changeLabels = { added: '추가', removed: '삭제', modified: '수정' };
-export default function ChangeTable({ changes }: { changes: Change[] }) {
+export default function ChangeTable({ changes, onLocate }: { changes: Change[]; onLocate?: (change: Change) => void }) {
   const [filter, setFilter] = useState<'all' | Change['op']>('all');
   const shown = changes.filter(change => filter === 'all' || change.op === filter);
   return <section className="section" aria-labelledby="changes-heading">
@@ -14,8 +14,8 @@ export default function ChangeTable({ changes }: { changes: Change[] }) {
       </div>
       <div className="table-scroll" role="region" aria-label="변경 내용 표" tabIndex={0}><table className="change-table">
         <thead><tr><th scope="col">위치</th><th scope="col">종류</th><th scope="col">이전</th><th scope="col">새 텍스트</th></tr></thead>
-        <tbody>{shown.map((change, i) => <tr key={`${change.where}-${i}`}>
-          <th scope="row">{change.where}</th><td><span className={`change-kind kind-${change.op}`}>{changeLabels[change.op]}</span></td>
+        <tbody>{shown.map((change, i) => <tr key={`${change.where}-${i}`} onClick={() => onLocate?.(change)}>
+          <th scope="row">{onLocate && (change.page || change.slide || change.sheet) ? <button className="location-button" onClick={event => { event.stopPropagation(); onLocate(change); }}>{change.where}</button> : change.where}</th><td><span className={`change-kind kind-${change.op}`}>{changeLabels[change.op]}</span></td>
           <td className="document-text">{change.old ?? <span className="muted">없음</span>}</td>
           <td className="document-text">{change.op === 'modified' ? <InlineDiff oldText={change.old ?? ''} newText={change.new ?? ''} /> : change.new ?? <span className="muted">없음</span>}</td>
         </tr>)}</tbody>

@@ -3,6 +3,24 @@ from lxml import etree
 
 W = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
 P = '{http://schemas.openxmlformats.org/presentationml/2006/main}'
+A = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
+
+
+def shape_label(element, paragraph=None):
+    if paragraph is not None:
+        cell = next((a for a in paragraph.iterancestors() if a.tag == A + 'tc'), None)
+        if cell is not None:
+            row = cell.getparent()
+            return f'표 {list(row.getparent().iterchildren(A + "tr")).index(row) + 1}행 {list(row.iterchildren(A + "tc")).index(cell) + 1}열'
+    placeholder = next(element.iter(P + 'ph'), None)
+    if placeholder is not None:
+        kind = placeholder.get('type', 'obj')
+        if kind in {'title', 'ctrTitle'}:
+            return '제목'
+        if kind in {'body', 'obj', 'subTitle'}:
+            return '본문'
+    props = next(element.iter(P + 'cNvPr'), None)
+    return f'도형 "{props.get("name", "") if props is not None else ""}"'
 
 
 def docx_location(info: dict) -> str | None:
@@ -58,9 +76,7 @@ def pptx_locations(presentation, elements: list[dict]) -> list[str | None]:
         element = para._p
         label = roots.get(element.getroottree().getroot())
         shape = next((a for a in element.iterancestors() if a.tag in {P + 'sp', P + 'graphicFrame'}), None)
-        if label and shape is not None:
-            props = next(shape.iter(P + 'cNvPr'), None)
-            if props is not None and props.get('name'):
-                label += ' · ' + props.get('name')
+        if label and shape is not None and '발표자 노트' not in label:
+            label += ' · ' + shape_label(shape, element)
         labels.append(label)
     return labels

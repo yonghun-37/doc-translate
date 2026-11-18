@@ -1,8 +1,9 @@
 """Local job JSON API and the built React application."""
 from pathlib import Path
+import re
 from urllib.parse import quote, urlsplit
 
-from fastapi import BackgroundTasks, Body, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, Body, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
@@ -10,6 +11,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.pipeline import InvalidUpload, Pipeline, StateError
 from app.storage import read_json
+from app import grid
 from app.web.models import Decision, Rejection, JobDetail, JobSummary, SheetDiff, SlideDiff
 from app.web.uploads import upload_form
 
@@ -46,7 +48,7 @@ def create_app(root: Path, *, pipeline: Pipeline | None = None, dist_dir: Path |
                     if denied else await call_next(request))
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
-        response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; frame-ancestors 'self'; form-action 'self'; base-uri 'none'"
+        response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'self'; form-action 'self'; base-uri 'none'"
         return response
 
     def state_for(job_id):
@@ -74,7 +76,7 @@ def create_app(root: Path, *, pipeline: Pipeline | None = None, dist_dir: Path |
         return store.statuses()
 
     @app.post('/api/jobs', status_code=201, response_model=JobDetail, response_model_exclude_unset=True)
-    async def uploads(request: Request):
+    async def uploads(request: Request, background_tasks: BackgroundTasks):
         async with upload_form(request, store.path('logs', '.uploads'), app.state.max_upload_bytes) as form:
             roles = {'original': 'original', 'revised': 'revised', 'base_zh_cn': 'base_zh-CN', 'base_zh_tw': 'base_zh-TW'}
             if (len(form.multi_items()) != len(form) or set(form) - {*roles, 'title', 'by'}
@@ -89,6 +91,8 @@ def create_app(root: Path, *, pipeline: Pipeline | None = None, dist_dir: Path |
                 state = await run_in_threadpool(pipeline.upload, files, title=form.get('title'), by=form.get('by'))
             except InvalidUpload as exc:
                 raise HTTPException(400, str(exc)) from None
+            if state.get('preview', {}).get('status') == 'pending':
+                background_tasks.add_task(pipeline.prepare_preview, state['id'])
             return detail(state)
 
     @app.get('/api/jobs/{job_id}', response_model=JobDetail, response_model_exclude_unset=True)
@@ -103,6 +107,20 @@ def create_app(root: Path, *, pipeline: Pipeline | None = None, dist_dir: Path |
         if 'original' not in state['files']:
             return []
         return read_json(store.job_dir(job_id) / 'review' / 'sheets.json')
+
+    @app.get('/api/jobs/{job_id}/grid')
+    def sheet_grid(job_id: str, sheet: str | None = None,
+                   row: int | None = Query(default=None, ge=1, le=1048576),
+                   col: int | None = Query(default=None, ge=1, le=16384)):
+        state = state_for(job_id)
+        if state['ext'] != 'xlsx':
+            raise HTTPException(404, '엑셀 문서에서만 격자를 제공합니다.')
+        if 'original' not in state['files']:
+            return []
+        folder = store.job_dir(job_id)
+        return grid.build(safe_file(folder, 'inputs/original.xlsx'), safe_file(folder, 'inputs/revised.xlsx'),
+                          read_json(folder / 'review/sheets.json'), read_json(folder / 'review/changes.json'),
+                          sheet=sheet, row=row, col=col)
 
     @app.get('/api/jobs/{job_id}/slides', response_model=list[SlideDiff])
     def slides(job_id: str):
@@ -151,6 +169,12 @@ def create_app(root: Path, *, pipeline: Pipeline | None = None, dist_dir: Path |
     @app.get('/api/jobs/{job_id}/files/{name:path}')
     def files(job_id: str, name: str):
         state = state_for(job_id)
+        if name.startswith('preview/'):
+            leaf = name.removeprefix('preview/')
+            if (state.get('preview', {}).get('status') != 'ready'
+                    or not re.fullmatch(r'(?:redline|original|revised)-[0-9]{3,}\.png|overlays\.json', leaf)):
+                raise HTTPException(404)
+            return FileResponse(safe_file(store.job_dir(job_id), f'review/preview/{leaf}'))
         if '/' in name or '\\' in name:
             raise HTTPException(404)
         folder = store.job_dir(job_id)

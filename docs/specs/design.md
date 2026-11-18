@@ -1,6 +1,6 @@
 # doc-translate 구현 명세 (독립 작업 모델)
 
-입력·저장·상태·매칭의 우선 명세는 [job-model.md](job-model.md)입니다. 기존 doc/rev 구조와 [web-upload.md](web-upload.md)는 대체되었습니다. 번역기 설정은 [translator-openai-compatible.md](translator-openai-compatible.md), 화면은 [frontend-react.md](frontend-react.md)를 따릅니다.
+변경 위치·미리보기·진행 상황은 [layout-view.md](layout-view.md)가 우선합니다. 입력·저장·상태·매칭의 우선 명세는 [job-model.md](job-model.md)입니다. 기존 doc/rev 구조와 [web-upload.md](web-upload.md)는 대체되었습니다. 번역기 설정은 [translator-openai-compatible.md](translator-openai-compatible.md), 화면은 [frontend-react.md](frontend-react.md)를 따릅니다.
 
 추출·되쓰기·LLM 호출은 **docutranslate**, DOCX 비교는 **python-redlines**, XLSX 비교는 **daff**를 재사용합니다. 라이브러리 소스를 복사하거나 수정하지 않습니다.
 
@@ -25,7 +25,8 @@
 - Python 3.12 (`.venv/`는 이미 3.12로 만들어져 있고 아래가 설치돼 있음)
 - `docutranslate==1.7.11` (MPL-2.0) — 추출·되쓰기·LLM 호출
 - `python-redlines[docxodus]==2.0.0` (MIT) — docx 변경 추적 문서 생성
-- `daff==1.4.2` (MIT) — 시트 표 비교
+- `daff==1.4.2` (MIT) — 시트 표 비교·행 정렬
+- `pypdfium2==5.15.2` (BSD-3-Clause·Apache-2.0 및 번들 고지) — PDF 페이지 PNG·텍스트. LibreOffice(MPL-2.0)는 서버에 별도 설치하는 외부 프로그램
 - `python-multipart==0.0.34` — 이미 설치된 multipart 파서를 직접 의존성으로 명시
 - `fastapi`, `uvicorn` — JSON API·정적 서빙; Vite·React·TypeScript는 frontend/package.json 고정 버전
 - 개발: `pytest`, `httpx`, `openpyxl`, `python-docx`, `python-pptx`, `pillow`
@@ -47,7 +48,7 @@
 
 - `run_redline`의 실제 반환형은 `(docx_bytes, stdout, stderr)`이며 첫 항목을 산출물로 저장합니다.
 - python-docx 1.2.0은 각주·미주를 일반 Part로 읽으므로, docutranslate 서브클래스에서 StoryPart로 연결한 뒤 upstream의 순회·되쓰기를 사용합니다. 라이브러리 파일은 수정하지 않습니다.
-- xlsx 원문 추출은 집합 순서이므로 공통 세그먼트 비교 전에 정렬해 안정화합니다. 실제 셀 위치·행 이동은 daff 화면으로 확인합니다.
+- xlsx 원문 추출은 집합 순서이므로 공통 세그먼트 비교 전에 정렬해 안정화합니다. 현재 변경 목록은 daff 행 정렬을 실제 셀 주소로 연결하며, 격자에서도 확인합니다.
 
 ## 4. 코드 구조
 
@@ -80,7 +81,7 @@ XLSX는 openpyxl 읽기 전용으로 (시트, 셀 주소) 문자열을 연결합
 
 ## 6. LLM 연결 (docutranslate 설정으로)
 
-`translator-openai-compatible.md`의 설정 표면(`base_url`, `model`, `api_key_env`, `api_key_file`, `allowed_hosts`, `ca_bundle`, `trust_env_proxy`, `temperature`, `max_tokens`, `timeout_sec`, `json_mode`, `extra_body`)은 유지하되, **HTTP 호출·배치·재시도는 직접 만들지 않고** docutranslate `SegmentsTranslateAgentConfig`로 넘깁니다.
+`translator-openai-compatible.md`의 설정 표면(`base_url`, `model`, `api_key_env`, `api_key_file`, `allowed_hosts`, `ca_bundle`, `trust_env_proxy`, `temperature`, `max_tokens`, `timeout_sec`, `json_mode`, `extra_body`)은 유지하되, **HTTP 요청·묶음 내부 병렬화·재시도는 직접 만들지 않고** docutranslate `SegmentsTranslateAgentConfig`로 넘깁니다. 앱의 `progress_batch`(기본 40)는 진행 콜백을 위한 고유 새 문장 묶음 크기이며 ReuseAgent에 적용합니다.
 
 - 매핑: `base_url→base_url`, `model→model_id`, 키→`api_key`, `temperature`, `timeout_sec→timeout`, `json_mode→force_json`, `extra_body`(여기에 `max_tokens` 병합), `retry`, `concurrent`(기본 4), `rpm`, `thinking="disable"`, `streaming`은 기본값.
 - `to_lang`: zh-CN → `"简体中文"`, zh-TW → `"繁體中文（台灣）"`. 필요하면 `custom_prompt`에 "대만 표준 용어와 정자체" 같은 지시를 덧붙입니다.
@@ -122,11 +123,11 @@ status에는 `id, title, ext, status, created_at, uploaded_by, decided_at, decid
 
 번역은 기존 ReuseAgent와 docutranslate를 조합합니다. XLSX headerFooter의 텍스트만 같은 에이전트로 처리하고 `&P`, `&N`, `&D`, 글꼴·크기 등 제어 코드를 유지합니다. 두 언어 파일을 job 안 임시 디렉토리에서 생성·검증한 뒤 output 디렉토리를 한 번에 이동하고 translated를 기록합니다. 일반 예외·Ctrl+C에는 부분 출력 제거 후 failed를 기록합니다. 재시도는 같은 입력·매칭 기억을 사용합니다.
 
-`logs/.pipeline.lock`의 flock으로 변경·번역을 직렬화합니다. translating 삭제는 잠금 대기 전에도 검사해 409를 반환하고, 삭제 잠금 안에서 다시 확인합니다. 읽기는 원자적 상태 스냅샷을 사용합니다. SIGKILL·정전 후 자동 복구/영속 큐는 제공하지 않습니다.
+`logs/.pipeline.lock`의 flock으로 변경·번역을 직렬화합니다. translating 삭제는 잠금 대기 전에도 검사해 409를 반환하고, 삭제 잠금 안에서 다시 확인합니다. 읽기는 원자적 상태 스냅샷을 사용합니다. 미리보기는 긴 파이프라인 잠금을 잡지 않고 별도 렌더 잠금을 사용합니다. 상태 필드 병합·미리보기 공개·삭제는 짧은 `.status.lock`으로 보호합니다. SIGKILL·정전 후 자동 복구/영속 큐는 제공하지 않습니다.
 
 ## 8. 웹·보안
 
-[frontend-react.md](frontend-react.md)의 `/`, `/new`, `/jobs/:id`와 `/api/jobs`를 사용합니다. Host 허용 목록·동일 출처 검사·보안 헤더·스트리밍 제한을 유지합니다. DELETE도 동일 출처를 검사합니다. 다운로드는 해당 job의 redline 또는 translated 상태에 공개한 출력만 허용하고 경로 탈출·심볼릭 링크를 차단합니다.
+[frontend-react.md](frontend-react.md)의 `/`, `/new`, `/jobs/:id`와 `/api/jobs`를 사용합니다. Host 허용 목록·동일 출처 검사·보안 헤더·스트리밍 제한을 유지합니다. DELETE도 동일 출처를 검사합니다. 다운로드는 해당 job의 redline.docx, ready 미리보기 PNG·overlays.json 또는 translated 상태에 공개한 출력만 허용하고 경로 탈출·심볼릭 링크를 차단합니다.
 
 ## 9. CLI
 
@@ -148,3 +149,11 @@ cd frontend && npm test && npm run typecheck && npm run build
 ```
 
 번역문 수동 편집, 로그인, 알림, 작업 큐·다중 작업자, 메모 번역, 문단 내부 부분 서식 개선은 범위 밖입니다.
+
+## 11. 레이아웃과 진행 상태
+
+`app/grid.py`는 읽기 전용 셀·스타일·병합·행/열 크기를 기존 daff 정렬과 연결합니다. `app/render.py`는 업로드 응답 뒤 LibreOffice → PDFium PNG와 Word 순차 페이지 매핑을 수행합니다. `app/slide_layout.py`는 기존 슬라이드 diff의 도형 좌표를 정규화하며 그룹은 바깥 그룹 경계를 사용합니다.
+
+`[render] soffice="", timeout_sec=120, max_pages=300`을 지원합니다. 실행 파일은 환경변수 DOC_TRANSLATE_SOFFICE, 설정, PATH, /opt 순으로 탐색합니다. 호출별 프로필은 logs/.lo-profile/UUID, 임시 PDF/PNG는 logs/.render-*에서 준비하고 성공 후 review/preview에 공개합니다. Word PDF는 review/redline.pdf에 보관합니다. preview는 pending/ready/unavailable/failed이며 실패해도 작업 상태를 바꾸지 않습니다.
+
+`app/progress.py`는 언어별 extract/reuse/llm/write/done·처리 개수·ETA·최근 50개 숫자 기록을 저장합니다. ReuseAgent의 progress_batch 기본값은 40입니다. 중간 저장은 초당 최대 1회, 최종 성공/실패는 즉시 저장하며 내용·키·응답은 기록하지 않습니다. 세부 계약과 제한은 layout-view.md 8절, 동시성 결정은 [ADR-004](../adr/ADR-004-layout-preview-and-progress.md)를 따릅니다.

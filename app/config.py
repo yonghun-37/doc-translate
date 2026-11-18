@@ -20,6 +20,18 @@ class ConfigError(ValueError):
     pass
 
 
+@dataclass
+class RenderConfig:
+    soffice: str = ''
+    timeout_sec: int = 120
+    max_pages: int = 300
+
+    def __post_init__(self):
+        if (not isinstance(self.soffice, str) or type(self.timeout_sec) is not int
+                or self.timeout_sec <= 0 or type(self.max_pages) is not int or self.max_pages <= 0):
+            raise ConfigError('render 경로는 문자열, 시간 제한·최대 페이지는 양의 정수여야 합니다.')
+
+
 def parse_key(content: str) -> str:
     for line in content.splitlines():
         line = line.strip()
@@ -60,8 +72,12 @@ class Config:
     concurrent: int = 4
     rpm: int | None = None
     extra_body: dict = field(default_factory=dict)
+    progress_batch: int = 40
+    render: RenderConfig = field(default_factory=RenderConfig)
 
     def __post_init__(self):
+        if type(self.progress_batch) is not int or self.progress_batch < 1:
+            raise ConfigError('progress_batch는 양의 정수여야 합니다.')
         if self.allow_remote is not None:
             logging.getLogger(__name__).warning(
                 'allow_remote는 폐기 예정입니다. 현재 base_url 호스트만 allowed_hosts에 추가합니다(값이 true인 경우).')
@@ -91,7 +107,8 @@ class Config:
             for env, key in [('DOC_TRANSLATE_BASE_URL', 'base_url'), ('DOC_TRANSLATE_MODEL', 'model')]:
                 if env in os.environ:
                     options[key] = os.environ[env]
-            return cls(root=root, engine=translator.get('engine', 'openai_compatible'), **options)
+            return cls(root=root, engine=translator.get('engine', 'openai_compatible'),
+                       render=RenderConfig(**data.get('render', {})), **options)
         except (TypeError, AttributeError, OSError, tomllib.TOMLDecodeError):
             raise ConfigError('config.toml의 설정 형식 또는 항목을 확인하세요.') from None
 

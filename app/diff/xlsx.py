@@ -65,7 +65,9 @@ def compare_sheets(old: Path | None, new: Path) -> list[dict]:
             elif cells:
                 rows.append({'marker': cells[0], 'cells': cells[1:]})
         status = 'added' if name not in before else 'removed' if name not in after else 'same' if a == b else 'changed'
-        result.append({'sheet': name, 'status': status, 'header': header, 'rows': rows})
+        result.append({'sheet': name, 'status': status, 'header': header, 'rows': rows,
+                       'row_pairs': [[unit.l, unit.r] for unit in alignment.toOrder().getList()
+                                     if unit.l != 0 and unit.r != 0]})
     return result
 
 

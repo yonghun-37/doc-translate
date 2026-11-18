@@ -6,7 +6,7 @@
 
 - 실행 중 외부 CDN·다운로드·텔레메트리를 사용하지 않습니다. Docxodus 실행 파일은 설치 패키지에 포함됩니다.
 - Python 3.12, uv와 `frontend/package-lock.json`을 사용합니다. 새 npm 의존성을 추가하지 않습니다.
-- 현재 `uv.lock`에는 `python-multipart==0.0.34` 직접 의존성이 반영되어 있습니다. 기존 잠금을 사용해 `uv sync --frozen`으로 설치합니다. 작업 모델 구현에서는 Python/npm 패키지·잠금 파일을 변경하지 않았습니다.
+- 현재 `uv.lock`에는 `python-multipart==0.0.34`와 `pypdfium2==5.15.2` 직접 의존성이 반영되어 있습니다. 기존 잠금을 사용해 `uv sync --frozen`으로 설치합니다. 작업 모델 구현에서는 Python/npm 패키지·잠금 파일을 변경하지 않았습니다.
 - `html2text`는 docutranslate 선언에는 있지만 import되지 않습니다. `pyproject.toml`의 `[tool.uv] override-dependencies = ["html2text; python_version < '0'"]`로 설치에서 제외합니다. uv를 거치지 않는 pip 설치는 이 정책을 적용하지 않습니다.
 
 ```bash
@@ -64,3 +64,30 @@ cd frontend && npm test && npm run typecheck && npm run build
 ```
 
 실제 사내 API·systemd 시작·Office 렌더링 확인은 배포 환경에서 수행합니다.
+
+## 4. 미리보기 렌더러와 진행 설정
+
+서버에 `libreoffice-writer-nogui libreoffice-impress-nogui fonts-noto-cjk` 또는 공식 LibreOffice tarball을 반입·설치합니다. LibreOffice(MPL-2.0)는 외부 실행만 하며 저장소에 포함하지 않습니다. pypdfium2의 LICENSE와 PDFium 번들 고지도 함께 보관합니다. 한글·중국어 글꼴이 없으면 배치가 달라지며, 회사 글꼴도 허용된 라이선스 범위에서 서버에 설치하세요.
+
+```toml
+[render]
+soffice = ""      # DOC_TRANSLATE_SOFFICE → 설정 → PATH → /opt/libreoffice*/program/soffice
+timeout_sec = 120
+max_pages = 300
+
+[translator.openai_compatible]
+# 기존 연결 항목에 추가 (테이블을 중복 선언하지 마세요)
+progress_batch = 40
+```
+
+서비스의 `DOC_TRANSLATE_SOFFICE` 또는 `[render] soffice`로 실제 실행 파일을 지정합니다. 개발 PC에서는 `~/.local/opt/lo/opt/libreoffice26.2/program/soffice`에 사용자 설치되어 있습니다. 서비스 계정은 해당 경로 실행·글꼴 읽기와 jobs/logs 쓰기 권한이 필요합니다. LibreOffice의 로컬 IPC를 차단하는 실행 샌드박스에서는 변환이 실패할 수 있습니다.
+
+업로드 응답 뒤 렌더링하며 한 번에 하나만 변환합니다. 호출마다 logs/.lo-profile/UUID 프로필을 만들고 정상/오류/시간 초과에 정리합니다. 시간 초과 시 프로세스 그룹 전체를 종료합니다. 긴 변 1600px PNG를 문서당 최대 300페이지 생성하므로 디스크 공간을 확보하세요. 미설치·실패 시 변경 목록과 번역은 계속 제공합니다. `progress_batch`는 새 문장 묶음의 진행 갱신 크기이며 HTTP 병렬화·재시도는 기존 설정을 따릅니다.
+
+기본 pytest는 LibreOffice 없이 실행하며, 통합 검증은 다음처럼 별도로 실행합니다(실제 LLM 없음).
+
+```bash
+DOC_TRANSLATE_SOFFICE="$HOME/.local/opt/lo/opt/libreoffice26.2/program/soffice" .venv/bin/python -m pytest -q
+```
+
+강제 종료 뒤 preview pending은 자동 재개되지 않습니다. 서비스를 중지하고 logs/.render-*와 .lo-profile의 중단 잔여물을 확인·정리한 뒤 새 작업으로 다시 올리세요. 기존 입력은 수정하지 않습니다. Host/Origin, --allowed-host, --max-upload-mb, 이미지 self CSP와 경로 탈출 차단은 그대로 유지합니다.

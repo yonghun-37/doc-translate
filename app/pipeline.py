@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import fcntl
 import hashlib
 import os
+import re
 from pathlib import Path
 import shutil
 import tempfile
@@ -13,6 +14,8 @@ import uuid
 
 from app.config import Config, LANGUAGES
 from app import alignment, engine
+from app import grid, render
+from app.progress import Progress
 from app.diagnostics import library_logger, safe_error
 from app.diff import docx, xlsx, pptx
 from app.diff.segments import compare
@@ -114,11 +117,19 @@ class Pipeline:
         before = extracted.get('original')
         after = extracted['revised']
         changes = compare(before[0], after[0], before[1], after[1]) if before is not None else []
+        if before is not None:
+            self._build_diff(inputs / f'original.{ext}', revised, review, ext)
+            if ext == 'xlsx':
+                changes = grid.changes(inputs / 'original.xlsx', revised, read_json(review / 'sheets.json'))
+            elif ext == 'pptx':
+                for change in changes:
+                    if match := re.match(r'슬라이드 (\d+)', change['where']):
+                        change['slide'] = int(match[1])
         write_json(review / 'changes.json', changes)
         counts = Counter(change['op'] for change in changes)
         state['counts'] = {op: counts[op] for op in ('added', 'removed', 'modified')}
         if before is not None:
-            self._build_diff(inputs / f'original.{ext}', revised, review, ext)
+            state['preview'] = {'status': 'ready' if ext == 'xlsx' else 'pending', 'message': '', 'pages': []}
         details, plans = {}, {}
         for lang in LANGUAGES:
             memory = {}
@@ -143,6 +154,9 @@ class Pipeline:
             xlsx.build_json(original, revised, directory / 'sheets.json')
         else:
             pptx.build(original, revised, directory / 'slides.json')
+
+    def prepare_preview(self, job_id):
+        render.prepare(self.store, job_id, self.config.render)
 
     def start_translation(self, job_id, by=None, *, background=False):
         with self._locked():
@@ -171,6 +185,7 @@ class Pipeline:
             if state['status'] != 'failed':
                 raise StateError('실패 상태에서만 재시도할 수 있습니다.')
             state.update(status='translating', error=None)
+            state.pop('progress', None)
             self.store.save_status(state)
             return state if background else self._translate_locked(state)
 
@@ -188,21 +203,27 @@ class Pipeline:
         with self._locked():
             if self.store.read_status(job_id)['status'] == 'translating':
                 raise StateError('번역 중인 작업은 삭제할 수 없습니다.')
-            shutil.rmtree(self.store.job_dir(job_id))
+            with self.store.status_locked():
+                shutil.rmtree(self.store.job_dir(job_id))
             self.store.event('deleted', id=job_id)
 
     def _translate_locked(self, state):
         job_id, ext = state['id'], state['ext']
         folder = self.store.job_dir(job_id)
         destination = folder / 'output'
+        progress = Progress(read_json(folder / 'review/plan.json'),
+                            lambda value: self.store.update_status(job_id, progress=value))
+        state['progress'] = progress.value
         try:
             with tempfile.TemporaryDirectory(prefix='.work-', dir=folder) as temp:
                 staging = Path(temp) / 'output'
                 staging.mkdir()
                 outputs, stats = {}, {}
                 for lang in LANGUAGES:
+                    progress.record(lang, 'extract')
                     memory = read_json(folder / 'review' / f'memory_{lang}.json')
-                    agent = ReuseAgent(memory, self.agent_factory(lang))
+                    agent = ReuseAgent(memory, self.agent_factory(lang), progress_batch=self.config.progress_batch,
+                                       callback=lambda phase, stats: progress.record(lang, phase, stats))
                     output = engine.translate(folder / 'inputs' / f'revised.{ext}', agent, logger=self.logger)
                     name = f"{Path(state['files']['revised']).stem}_{lang}.{ext}"
                     staged = staging / name
@@ -211,6 +232,7 @@ class Pipeline:
                     outputs[lang] = f'output/{name}'
                     stats[lang] = agent.stats
                     self.store.event('translation', id=job_id, lang=lang, **agent.stats)
+                    progress.record(lang, 'done', agent.stats)
                 os.replace(staging, destination)
                 state.update(status='translated', outputs=outputs, stats=stats, error=None)
                 self.store.save_status(state)

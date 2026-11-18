@@ -8,6 +8,8 @@
 
 이 표는 설치된 라이선스 고지를 대신하지 않습니다. 패키지의 LICENSE·NOTICE와 번들 구성요소 고지를 함께 보관하세요. `확인 필요` 항목은 반입 전에 해당 파일을 확인해야 합니다.
 
+미리보기는 pypdfium2 5.15.2(BSD-3-Clause·Apache-2.0 및 PDFium 번들 고지)를 사용합니다. LibreOffice(MPL-2.0)는 서버에 별도 설치하는 외부 실행 프로그램이며 저장소·Python 패키지에 포함하지 않습니다. `[render]`로 실행 경로·제한을 설정합니다. 번역 진행의 `progress_batch`는 기존 docutranslate 호출을 묶는 앱 설정이며 추가 의존성이 없습니다.
+
 ## Python
 
 | 패키지 | 버전 | 구분 | 라이선스 | 근거·비고 |
@@ -76,11 +78,12 @@
 | Pygments | 2.21.0 | 간접·환경 | BSD-2-Clause | License-Expression |
 | pymdown-extensions | 13.1 | 간접·환경 | MIT | License-Expression |
 | pypdf | 7.1.0 | 간접·환경 | BSD-3-Clause | License-Expression |
+| pypdfium2 | 5.15.2 | 직접 | BSD-3-Clause, Apache-2.0, dependency licenses | License |
 | pysubs2 | 1.9.1 | 간접·환경 | MIT | License-Expression |
 | pytest | 9.2.0 | 개발 직접 | MIT | License-Expression |
 | python-docx | 1.2.0 | 직접 | MIT | License |
 | python-dotenv | 1.2.4 | 간접·환경 | BSD-3-Clause | License |
-| python-multipart | 0.0.34 | 간접·환경 | Apache-2.0 | License-Expression |
+| python-multipart | 0.0.34 | 직접 | Apache-2.0 | License-Expression |
 | python-pptx | 1.0.2 | 직접 | MIT | License |
 | python-redlines | 2.0.0 | 직접 | MIT | License-Expression |
 | python-redlines-docxodus | 2.0.0 | 간접·환경 | MIT | License-Expression |

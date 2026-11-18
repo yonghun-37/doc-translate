@@ -9,6 +9,8 @@ import SlideDiff from '../components/SlideDiff';
 import DecisionPanel from '../components/DecisionPanel';
 import OutputFiles from '../components/OutputFiles';
 import TranslationPlan from '../components/TranslationPlan';
+import LayoutView from '../components/LayoutView';
+import TranslationProgress from '../components/TranslationProgress';
 import { formatDate } from './ReviewList';
 
 export default function ReviewDetail() {
@@ -17,7 +19,7 @@ export default function ReviewDetail() {
   const client = useQueryClient();
   const [notice, setNotice] = useState('');
   const key = ['job', id];
-  const query = useQuery({ queryKey: key, queryFn: () => api.job(id), refetchInterval: query => query.state.data?.status === 'translating' ? 2000 : false });
+  const query = useQuery({ queryKey: key, queryFn: () => api.job(id), refetchInterval: query => query.state.data?.status === 'translating' ? 2000 : query.state.data?.preview?.status === 'pending' ? 3000 : false });
   const job = query.data;
   const hasOriginal = Boolean(job?.files.original);
   const sheets = useQuery({ queryKey: [...key, 'sheets'], queryFn: () => api.sheets(id), enabled: job?.ext === 'xlsx' && hasOriginal });
@@ -55,12 +57,13 @@ export default function ReviewDetail() {
         <div><dt>원본</dt><dd>{job.files.original ?? '없음'}</dd></div><div><dt>수정본</dt><dd>{job.files.revised}</dd></div><div><dt>기존 간체본</dt><dd>{job.files['base_zh-CN'] ?? '없음'}</dd></div><div><dt>기존 번체본</dt><dd>{job.files['base_zh-TW'] ?? '없음'}</dd></div>
         {job.reason && <div className="reason-meta"><dt>반려 사유</dt><dd>{job.reason}</dd></div>}</dl>
       {job.status === 'translating' && <p className="info-banner" role="status">번역을 진행하고 있습니다. 완료되면 결과를 자동으로 표시합니다.</p>}
+      {job.progress && <TranslationProgress progress={job.progress} running={job.status === 'translating'} />}
       {job.status === 'failed' && <button className="primary" disabled={busy} onClick={() => mutation.mutate({ action: 'retry' })}>{busy ? '처리 중…' : '재시도'}</button>}
       {job.status === 'translated' && <OutputFiles outputs={job.outputs} stats={job.stats} />}
       {job.ext === 'docx' && job.artifacts.redline && <div className="redline-download"><a className="button" href={job.artifacts.redline} download>Word 변경 추적 내려받기</a><p className="muted">Word에서 열면 변경 추적으로 보입니다.</p></div>}
-      {hasOriginal ? <ChangeTable changes={job.changes} /> : <p className="info-banner">신규 문서 — 전체 번역</p>}
-      {hasOriginal && job.ext === 'xlsx' && (sheets.isPending ? <p role="status">시트 비교를 불러오는 중입니다.</p> : sheets.data && <SheetDiff sheets={sheets.data} />)}
-      {hasOriginal && job.ext === 'pptx' && (slides.isPending ? <p role="status">슬라이드 비교를 불러오는 중입니다.</p> : slides.data && <SlideDiff slides={slides.data} />)}
+      {hasOriginal ? job.preview ? <LayoutView key={job.id} job={job} sheets={sheets.data} slides={slides.data} /> : <ChangeTable changes={job.changes} /> : <p className="info-banner">신규 문서 — 전체 번역</p>}
+      {hasOriginal && !job.preview && job.ext === 'xlsx' && (sheets.isPending ? <p role="status">시트 비교를 불러오는 중입니다.</p> : sheets.data && <SheetDiff sheets={sheets.data} />)}
+      {hasOriginal && !job.preview && job.ext === 'pptx' && (slides.isPending ? <p role="status">슬라이드 비교를 불러오는 중입니다.</p> : slides.data && <SlideDiff slides={slides.data} />)}
       <TranslationPlan job={job} />
       {job.status === 'pending' && <DecisionPanel newDocument={!hasOriginal} busy={busy} onDecision={(action, body) => mutation.mutate({ action, body })} />}
       <div className="section"><button className="reject-button" disabled={busy || job.status === 'translating'} onClick={() => {
